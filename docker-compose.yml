@@ -1,0 +1,31 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.17.1
+    container_name: camera-mediamtx
+    restart: unless-stopped
+    ports:
+      - "8554:8554"
+      - "1935:1935"
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189/udp"
+      - "8000:8000/udp"
+      - "8001:8001/udp"
+      - "8890:8890/udp"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    command: ["/mediamtx", "/mediamtx.yml"]
+
+  tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: camera-tracker
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+    environment:
+      CONFIG_PATH: config/config.docker.yaml
+      SECRETS_PATH: config/secrets.env
+    volumes:
+      - ./config/secrets.env:/app/config/secrets.env:ro

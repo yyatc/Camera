@@ -36,6 +36,18 @@
 - VLC: `Media -> Open Network Stream`
 - Для меньшей задержки в VLC используйте `:rtsp-tcp`.
 
+## Запуск через Docker
+1. Убедитесь, что заполнен `config/secrets.env`.
+2. Соберите и запустите:
+   - `docker compose up -d --build`
+3. Проверьте логи:
+   - `docker compose logs -f tracker`
+   - `docker compose logs -f mediamtx`
+4. Откройте поток:
+   - `rtsp://127.0.0.1:8554/tracking`
+5. Остановка:
+   - `docker compose down`
+
 ## Что отображается на видео
 - Белый прямоугольник вокруг текущей цели.
 - Справа под рамкой: `ID цели / total`.

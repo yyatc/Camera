@@ -33,8 +33,10 @@ class Settings:
 
 def load_settings(base_path: str | Path) -> Settings:
     base = Path(base_path)
-    config_path = base / "config" / "config.yaml"
-    secrets_path = base / "config" / "secrets.env"
+    config_rel = os.getenv("CONFIG_PATH", "config/config.yaml")
+    secrets_rel = os.getenv("SECRETS_PATH", "config/secrets.env")
+    config_path = base / config_rel
+    secrets_path = base / secrets_rel
 
     with config_path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
