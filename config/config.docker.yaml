@@ -1,14 +1,20 @@
 app:
   frame_width: 640
   frame_height: 360
-  process_fps: 22
+  process_fps: 20
+  cv_threads: 2
+  log_level: INFO
+  heartbeat_interval_sec: 5.0
 
 tracking:
   detection_confidence: 0.52
   tracking_timeout_sec: 2.5
   detector_model: "yolo11n.pt"
   detect_every_n_frames: 1
-  detector_input_size: 512
+  detect_every_n_frames_tracking: 1
+  detect_every_n_frames_searching: 2
+  detector_input_size: 448
+  detector_max_detections: 20
   min_bbox_area_ratio: 0.005
   max_bbox_area_ratio: 0.72
   min_aspect_h_w: 0.9

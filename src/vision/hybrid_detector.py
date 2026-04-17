@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import List
 
 import numpy as np
 
 from src.common.types import Detection
+
+logger = logging.getLogger(__name__)
 from src.vision.local_person_detector import LocalPersonDetector
 
 
@@ -33,5 +36,8 @@ class HybridDetector:
     def detect(self, frame: np.ndarray) -> List[Detection]:
         camera_dets = [d for d in self._camera.detect(frame) if d.confidence >= self._min_confidence]
         if camera_dets:
+            logger.debug("Детекция: камера, объектов=%s", len(camera_dets))
             return camera_dets
-        return [d for d in self._local.detect(frame) if d.confidence >= self._min_confidence]
+        out = [d for d in self._local.detect(frame) if d.confidence >= self._min_confidence]
+        logger.debug("Детекция: локально, объектов=%s", len(out))
+        return out

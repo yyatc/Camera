@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import hypot
 from typing import Dict, List, Tuple
+import logging
 import time
 
 from src.common.types import Detection, TrackedPerson
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -55,6 +58,11 @@ class PersonTracker:
                 self._total_seen_unique += 1
                 self._first_seen_ts[new_id] = now
                 assigned[new_id] = det
+                logger.info(
+                    "Новый объект в кадре: id=%s (уникальных за сессию: %s)",
+                    new_id,
+                    self._total_seen_unique,
+                )
 
         # Обновляем/создаем треки.
         updated_track_ids = set()
@@ -69,6 +77,7 @@ class PersonTracker:
             if now - state.person.last_seen_ts > self._timeout_sec:
                 expired.append(track_id)
         for track_id in expired:
+            logger.debug("Трек id=%s снят по таймауту (>%s с)", track_id, self._timeout_sec)
             self._tracks.pop(track_id, None)
 
         # Для принятия решений по PTZ возвращаем только цели, увиденные в текущем кадре.

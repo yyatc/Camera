@@ -2,6 +2,12 @@ app:
   frame_width: 640
   frame_height: 360
   process_fps: 22
+  # Число потоков OpenCV (0 = оставить автонастройку OpenCV).
+  cv_threads: 0
+  # Уровень логов: DEBUG, INFO, WARNING, ERROR (перекрывается переменной окружения LOG_LEVEL).
+  log_level: INFO
+  # Период строки «пульс»: режим, FPS, счётчики (секунды).
+  heartbeat_interval_sec: 5.0
 
 tracking:
   # Выше порог — меньше ложных «людей» на шуме/мелочи (класс COCO id=0 только в YOLO).
@@ -9,7 +15,12 @@ tracking:
   tracking_timeout_sec: 2.5
   detector_model: "yolo11n.pt"
   detect_every_n_frames: 1
+  # В TRACKING можно чаще считать детекцию, в SEARCHING реже для экономии CPU.
+  detect_every_n_frames_tracking: 1
+  detect_every_n_frames_searching: 2
   detector_input_size: 512
+  # Ограничение числа боксов от детектора (уменьшает постобработку на CPU).
+  detector_max_detections: 20
   # Отсекаем слишком маленькие/большие и нетипичные по форме боксы (мусор).
   min_bbox_area_ratio: 0.005
   max_bbox_area_ratio: 0.72

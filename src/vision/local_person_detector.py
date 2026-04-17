@@ -24,6 +24,7 @@ class LocalPersonDetector:
         min_aspect_h_w: float = 0.85,
         max_aspect_h_w: float = 4.2,
         yolo_iou: float = 0.5,
+        max_detections: int = 20,
     ) -> None:
         self._confidence = confidence
         self._input_size = input_size
@@ -32,6 +33,7 @@ class LocalPersonDetector:
         self._min_aspect_h_w = min_aspect_h_w
         self._max_aspect_h_w = max_aspect_h_w
         self._yolo_iou = yolo_iou
+        self._max_detections = max(1, int(max_detections))
         self._model = YOLO(model_name) if YOLO else None
         self._hog = cv2.HOGDescriptor()
         self._hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
@@ -49,6 +51,8 @@ class LocalPersonDetector:
             conf=self._confidence,
             iou=self._yolo_iou,
             imgsz=self._input_size,
+            max_det=self._max_detections,
+            device="cpu",
             verbose=False,
         )
         fh, fw = frame.shape[0], frame.shape[1]
