@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from random import uniform
 from typing import Optional, Tuple
 
 from src.common.types import PTZCommand, TrackedPerson
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -23,6 +26,10 @@ class PtzPolicyConfig:
     search_pan_speed: float
     search_tilt_speed: float
     search_zoom_out_speed: float
+    # Минимальная скорость при которой мотор физически начинает двигаться.
+    # Команды ниже этого порога (но ненулевые) поднимаются до минимума.
+    min_effective_pan_speed: float = 0.0
+    min_effective_tilt_speed: float = 0.0
 
 
 class PtzControlPolicy:
@@ -50,11 +57,16 @@ class PtzControlPolicy:
         tilt_speed = 0.0 if abs(err_y) < self._cfg.center_tolerance_y else -err_y * self._cfg.tilt_gain
         zoom_speed = 0.0 if abs(zoom_err) < self._cfg.zoom_hysteresis else zoom_err * self._cfg.zoom_gain
 
-        return PTZCommand(
-            pan_speed=_clip(pan_speed, self._cfg.max_pan_speed),
-            tilt_speed=_clip(tilt_speed, self._cfg.max_tilt_speed),
-            zoom_speed=_clip(zoom_speed, self._cfg.max_zoom_speed),
+        pan_speed = _clip(_apply_min_speed(pan_speed, self._cfg.min_effective_pan_speed), self._cfg.max_pan_speed)
+        tilt_speed = _clip(_apply_min_speed(tilt_speed, self._cfg.min_effective_tilt_speed), self._cfg.max_tilt_speed)
+        zoom_speed = _clip(zoom_speed, self._cfg.max_zoom_speed)
+
+        logger.debug(
+            "PTZ tracking: err=(%.3f, %.3f) area=%.3f → pan=%.3f tilt=%.3f zoom=%.3f",
+            err_x, err_y, area_ratio, pan_speed, tilt_speed, zoom_speed,
         )
+
+        return PTZCommand(pan_speed=pan_speed, tilt_speed=tilt_speed, zoom_speed=zoom_speed)
 
     def search_command(self, reset_zoom: bool = False) -> Optional[PTZCommand]:
         pan = uniform(-self._cfg.search_pan_speed, self._cfg.search_pan_speed)
@@ -74,6 +86,14 @@ class PtzControlPolicy:
         tilt = _clip(tilt, self._cfg.max_tilt_speed)
         zoom_speed = self._cfg.search_zoom_out_speed if int(ts * 2) % 4 == 0 else 0.0
         return PTZCommand(pan_speed=pan, tilt_speed=tilt, zoom_speed=zoom_speed)
+
+
+def _apply_min_speed(speed: float, min_speed: float) -> float:
+    """Если скорость ненулевая, но меньше минимума — поднять до минимума.
+    Это компенсирует статическое трение мотора камеры."""
+    if speed == 0.0 or min_speed <= 0.0:
+        return speed
+    return math.copysign(max(abs(speed), min_speed), speed)
 
 
 def _clip(value: float, lim: float) -> float:

@@ -115,21 +115,24 @@ def run() -> None:
         height=height,
         fps=fps,
     )
+    ptz_cfg = settings.raw["ptz"]
     policy = PtzControlPolicy(
         PtzPolicyConfig(
-            pan_gain=settings.raw["ptz"]["pan_gain"],
-            tilt_gain=settings.raw["ptz"]["tilt_gain"],
-            zoom_gain=settings.raw["ptz"]["zoom_gain"],
-            max_pan_speed=settings.raw["ptz"]["max_pan_speed"],
-            max_tilt_speed=settings.raw["ptz"]["max_tilt_speed"],
-            max_zoom_speed=settings.raw["ptz"]["max_zoom_speed"],
+            pan_gain=ptz_cfg["pan_gain"],
+            tilt_gain=ptz_cfg["tilt_gain"],
+            zoom_gain=ptz_cfg["zoom_gain"],
+            max_pan_speed=ptz_cfg["max_pan_speed"],
+            max_tilt_speed=ptz_cfg["max_tilt_speed"],
+            max_zoom_speed=ptz_cfg["max_zoom_speed"],
             center_tolerance_x=settings.raw["tracking"]["center_tolerance_x"],
             center_tolerance_y=settings.raw["tracking"]["center_tolerance_y"],
             target_area_ratio=settings.raw["tracking"]["target_area_ratio"],
             zoom_hysteresis=settings.raw["tracking"]["zoom_hysteresis"],
-            search_pan_speed=settings.raw["ptz"]["search_pan_speed"],
-            search_tilt_speed=settings.raw["ptz"]["search_tilt_speed"],
-            search_zoom_out_speed=settings.raw["ptz"]["search_zoom_out_speed"],
+            search_pan_speed=ptz_cfg["search_pan_speed"],
+            search_tilt_speed=ptz_cfg["search_tilt_speed"],
+            search_zoom_out_speed=ptz_cfg["search_zoom_out_speed"],
+            min_effective_pan_speed=float(ptz_cfg.get("min_effective_pan_speed", 0.0)),
+            min_effective_tilt_speed=float(ptz_cfg.get("min_effective_tilt_speed", 0.0)),
         )
     )
 
@@ -280,20 +283,15 @@ def _safe_ptz_move(
     ts: float,
     last_error_log_ts: float,
 ) -> float:
+    # safe_move() неблокирующий — ставит команду в очередь PTZ-воркера.
+    # ONVIF Fault-ы обрабатываются внутри воркера; здесь исключений не ожидается.
     try:
         ptz.safe_move(cmd)
-        return last_error_log_ts
     except Exception as exc:
-        # Не допускаем падения сервиса из-за ONVIF Fault (например "out of bounds").
         if ts - last_error_log_ts >= 2.0:
             logger.warning("Команда PTZ не выполнена: %s", exc)
             last_error_log_ts = ts
-        try:
-            ptz.stop()
-        except Exception:
-            pass
-        time.sleep(0.2)
-        return last_error_log_ts
+    return last_error_log_ts
 
 
 def _init_ptz_client(

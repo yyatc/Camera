@@ -80,8 +80,10 @@ class PersonTracker:
             logger.debug("Трек id=%s снят по таймауту (>%s с)", track_id, self._timeout_sec)
             self._tracks.pop(track_id, None)
 
-        # Для принятия решений по PTZ возвращаем только цели, увиденные в текущем кадре.
-        return [self._tracks[track_id].person for track_id in updated_track_ids if track_id in self._tracks]
+        # Возвращаем все живые треки (включая недавно виденных, но не попавших в текущий кадр).
+        # Это позволяет PTZ удерживать цель во время временных пропусков детекции
+        # вместо мгновенного переключения в SEARCHING при каждом пропуске YOLO.
+        return [state.person for state in self._tracks.values()]
 
 
 def _center(bbox: Tuple[int, int, int, int]) -> Tuple[float, float]:

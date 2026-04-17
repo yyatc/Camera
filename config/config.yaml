@@ -29,16 +29,20 @@ tracking:
   yolo_iou: 0.5
   center_tolerance_x: 0.09
   center_tolerance_y: 0.09
-  target_area_ratio: 0.60
+  target_area_ratio: 0.15
   zoom_hysteresis: 0.10
 
 ptz:
-  pan_gain: 0.58
-  tilt_gain: 0.55
+  pan_gain: 1.2
+  tilt_gain: 1.0
   zoom_gain: 0.32
-  max_pan_speed: 0.24
-  max_tilt_speed: 0.20
+  max_pan_speed: 0.55
+  max_tilt_speed: 0.45
   max_zoom_speed: 0.18
+  # Минимальная скорость, ниже которой мотор физически не двигается.
+  # Если команда ненулевая, но меньше этого порога — поднимаем до порога.
+  min_effective_pan_speed: 0.07
+  min_effective_tilt_speed: 0.07
   search_pan_speed: 0.06
   search_tilt_speed: 0.035
   search_zoom_out_speed: -0.10
