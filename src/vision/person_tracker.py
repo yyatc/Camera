@@ -21,10 +21,15 @@ class PersonTracker:
         self._next_track_id = 1
         self._tracks: Dict[int, _TrackState] = {}
         self._total_seen_unique = 0
+        self._first_seen_ts: Dict[int, float] = {}
 
     @property
     def total_seen_unique(self) -> int:
         return self._total_seen_unique
+
+    @property
+    def first_seen_ts(self) -> Dict[int, float]:
+        return dict(self._first_seen_ts)
 
     def update(self, detections: List[Detection], ts: float | None = None) -> List[TrackedPerson]:
         now = ts if ts is not None else time.time()
@@ -48,6 +53,7 @@ class PersonTracker:
                 new_id = self._next_track_id
                 self._next_track_id += 1
                 self._total_seen_unique += 1
+                self._first_seen_ts[new_id] = now
                 assigned[new_id] = det
 
         # Обновляем/создаем треки.

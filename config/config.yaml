@@ -1,14 +1,21 @@
 app:
-  frame_width: 960
-  frame_height: 540
-  process_fps: 15
+  frame_width: 640
+  frame_height: 360
+  process_fps: 22
 
 tracking:
-  detection_confidence: 0.40
-  tracking_timeout_sec: 2.8
+  # Выше порог — меньше ложных «людей» на шуме/мелочи (класс COCO id=0 только в YOLO).
+  detection_confidence: 0.52
+  tracking_timeout_sec: 2.5
   detector_model: "yolo11n.pt"
-  detect_every_n_frames: 2
-  detector_input_size: 640
+  detect_every_n_frames: 1
+  detector_input_size: 512
+  # Отсекаем слишком маленькие/большие и нетипичные по форме боксы (мусор).
+  min_bbox_area_ratio: 0.005
+  max_bbox_area_ratio: 0.72
+  min_aspect_h_w: 0.9
+  max_aspect_h_w: 4.0
+  yolo_iou: 0.5
   center_tolerance_x: 0.09
   center_tolerance_y: 0.09
   target_area_ratio: 0.60
@@ -22,12 +29,12 @@ ptz:
   max_tilt_speed: 0.20
   max_zoom_speed: 0.18
   search_pan_speed: 0.06
-  search_tilt_speed: 0.03
-  search_zoom_out_speed: -0.16
-  search_step_sec: 1.6
+  search_tilt_speed: 0.035
+  search_zoom_out_speed: -0.10
+  monitoring_ptz_interval_sec: 0.20
 
 stream:
   input_rtsp: "rtsp://{CAMERA_USERNAME}:{CAMERA_PASSWORD}@{CAMERA_HOST}:554/stream1"
   output_rtsp: "rtsp://127.0.0.1:8554/tracking"
   mediamtx_push_path: "tracking"
-  ffmpeg_bin: "C:/Users/kseni/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1-full_build/bin/ffmpeg.exe"
+  ffmpeg_bin: "ffmpeg"

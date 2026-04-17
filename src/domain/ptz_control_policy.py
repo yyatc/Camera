@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from random import uniform
 from typing import Optional, Tuple
@@ -60,6 +61,19 @@ class PtzControlPolicy:
         tilt = uniform(-self._cfg.search_tilt_speed, self._cfg.search_tilt_speed)
         zoom = self._cfg.search_zoom_out_speed if reset_zoom else 0.0
         return PTZCommand(pan_speed=pan, tilt_speed=tilt, zoom_speed=zoom)
+
+    def monitoring_command(self, ts: float) -> PTZCommand:
+        """
+        Мягкий мониторинг: плавные pan/tilt колебания + импульсный zoom-out.
+        """
+        jx = uniform(-0.20, 0.20)
+        jy = uniform(-0.20, 0.20)
+        pan = 0.7 * self._cfg.search_pan_speed * math.sin(ts * 0.24) + jx * self._cfg.search_pan_speed
+        tilt = 0.7 * self._cfg.search_tilt_speed * math.cos(ts * 0.20) + jy * self._cfg.search_tilt_speed
+        pan = _clip(pan, self._cfg.max_pan_speed)
+        tilt = _clip(tilt, self._cfg.max_tilt_speed)
+        zoom_speed = self._cfg.search_zoom_out_speed if int(ts * 2) % 4 == 0 else 0.0
+        return PTZCommand(pan_speed=pan, tilt_speed=tilt, zoom_speed=zoom_speed)
 
 
 def _clip(value: float, lim: float) -> float:

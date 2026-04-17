@@ -6,6 +6,7 @@ from typing import Optional
 
 from src.camera.onvif_client import OnvifPtzClient
 from src.camera.rtsp_reader import RtspReader
+from src.common.types import PTZCommand
 from src.common.settings import load_settings
 from src.domain.ptz_control_policy import PtzPolicyConfig, PtzControlPolicy
 from src.domain.target_selector import TargetSelector
@@ -35,14 +36,20 @@ def run() -> None:
         password=settings.camera_password,
         preferred_port=settings.raw.get("ptz", {}).get("onvif_port"),
     )
+    tr = settings.raw["tracking"]
     detector = HybridDetector(
         local_detector=LocalPersonDetector(
-            settings.raw["tracking"]["detection_confidence"],
-            input_size=int(settings.raw["tracking"].get("detector_input_size", 640)),
-            model_name=str(settings.raw["tracking"].get("detector_model", "yolo11n.pt")),
+            tr["detection_confidence"],
+            input_size=int(tr.get("detector_input_size", 640)),
+            model_name=str(tr.get("detector_model", "yolo11n.pt")),
+            min_bbox_area_ratio=float(tr.get("min_bbox_area_ratio", 0.004)),
+            max_bbox_area_ratio=float(tr.get("max_bbox_area_ratio", 0.75)),
+            min_aspect_h_w=float(tr.get("min_aspect_h_w", 0.85)),
+            max_aspect_h_w=float(tr.get("max_aspect_h_w", 4.2)),
+            yolo_iou=float(tr.get("yolo_iou", 0.5)),
         ),
         camera_adapter=CameraAnalyticsAdapter(),
-        min_confidence=settings.raw["tracking"]["detection_confidence"],
+        min_confidence=tr["detection_confidence"],
     )
     tracker = PersonTracker(timeout_sec=settings.raw["tracking"]["tracking_timeout_sec"])
     selector = TargetSelector()
@@ -75,8 +82,9 @@ def run() -> None:
 
     mode = TrackingMode.SEARCHING
     current_target_id = None
-    last_search_move = 0.0
-    search_step_sec = settings.raw["ptz"]["search_step_sec"]
+    monitor_ptz_interval = float(settings.raw["ptz"].get("monitoring_ptz_interval_sec", 0.20))
+    last_monitor_ptz_ts = 0.0
+    last_ptz_error_log_ts = 0.0
     read_fail_count = 0
     frame_index = 0
     cached_detections = []
@@ -111,24 +119,20 @@ def run() -> None:
             detections = cached_detections
             tracks = tracker.update(detections, ts=ts)
             target = selector.choose_target(tracks, preferred_id=current_target_id)
-            prev_mode = mode
             if target is not None:
                 mode = TrackingMode.TRACKING
                 current_target_id = target.track_id
                 cmd = policy.tracking_command(target, (frame.shape[1], frame.shape[0]))
                 if ptz is not None:
-                    ptz.safe_move(cmd)
+                    last_ptz_error_log_ts = _safe_ptz_move(ptz, cmd, ts, last_ptz_error_log_ts)
             else:
                 mode = TrackingMode.SEARCHING
                 current_target_id = None
-                # При потере цели сначала делаем zoom-out, затем хаотичный поиск.
-                if ptz is not None and prev_mode != TrackingMode.SEARCHING:
-                    ptz.safe_move(policy.search_command(reset_zoom=True))
-                    last_search_move = ts
-                if ts - last_search_move >= search_step_sec:
-                    if ptz is not None:
-                        ptz.safe_move(policy.search_command())
-                    last_search_move = ts
+                if ptz is not None and (ts - last_monitor_ptz_ts) >= monitor_ptz_interval:
+                    last_ptz_error_log_ts = _safe_ptz_move(
+                        ptz, policy.monitoring_command(ts), ts, last_ptz_error_log_ts
+                    )
+                    last_monitor_ptz_ts = ts
 
             registry.tick(current_target_id, ts=ts)
 
@@ -138,14 +142,40 @@ def run() -> None:
                 total_count=tracker.total_seen_unique,
                 per_person_seconds=registry.per_person_seconds,
                 total_seconds=registry.total_seconds,
+                first_seen_ts=tracker.first_seen_ts,
             )
             publisher.write(rendered)
             time.sleep(step)
     finally:
         if ptz is not None:
-            ptz.stop()
+            try:
+                ptz.stop()
+            except Exception:
+                pass
         publisher.close()
         reader.close()
+
+
+def _safe_ptz_move(
+    ptz: OnvifPtzClient,
+    cmd: PTZCommand,
+    ts: float,
+    last_error_log_ts: float,
+) -> float:
+    try:
+        ptz.safe_move(cmd)
+        return last_error_log_ts
+    except Exception as exc:
+        # Не допускаем падения сервиса из-за ONVIF Fault (например "out of bounds").
+        if ts - last_error_log_ts >= 2.0:
+            print(f"[PTZ] move failed: {exc}")
+            last_error_log_ts = ts
+        try:
+            ptz.stop()
+        except Exception:
+            pass
+        time.sleep(0.2)
+        return last_error_log_ts
 
 
 def _init_ptz_client(

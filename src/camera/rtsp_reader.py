@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Optional, Tuple
 
 import cv2
@@ -14,6 +15,10 @@ class RtspReader:
         self._cap: Optional[cv2.VideoCapture] = None
 
     def open(self) -> None:
+        # Стабильнее для IP-камер: принудительно TCP-транспорт + таймауты.
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+            "rtsp_transport;tcp|stimeout;5000000|max_delay;500000|reorder_queue_size;0"
+        )
         self._cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
