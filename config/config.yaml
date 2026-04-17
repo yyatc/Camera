@@ -1,0 +1,33 @@
+app:
+  frame_width: 960
+  frame_height: 540
+  process_fps: 15
+
+tracking:
+  detection_confidence: 0.40
+  tracking_timeout_sec: 2.8
+  detector_model: "yolo11n.pt"
+  detect_every_n_frames: 2
+  detector_input_size: 640
+  center_tolerance_x: 0.09
+  center_tolerance_y: 0.09
+  target_area_ratio: 0.60
+  zoom_hysteresis: 0.10
+
+ptz:
+  pan_gain: 0.58
+  tilt_gain: 0.55
+  zoom_gain: 0.32
+  max_pan_speed: 0.24
+  max_tilt_speed: 0.20
+  max_zoom_speed: 0.18
+  search_pan_speed: 0.06
+  search_tilt_speed: 0.03
+  search_zoom_out_speed: -0.16
+  search_step_sec: 1.6
+
+stream:
+  input_rtsp: "rtsp://{CAMERA_USERNAME}:{CAMERA_PASSWORD}@{CAMERA_HOST}:554/stream1"
+  output_rtsp: "rtsp://127.0.0.1:8554/tracking"
+  mediamtx_push_path: "tracking"
+  ffmpeg_bin: "C:/Users/kseni/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1-full_build/bin/ffmpeg.exe"
