@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol
 
 import cv2
 
+from src.camera.isapi_client import IsapiPtzClient
+from src.camera.isapi_event_stream import IsapiEventStreamClient
 from src.camera.onvif_client import OnvifPtzClient
 from src.camera.rtsp_reader import RtspReader
 from src.common.logging_setup import configure_logging, sanitize_rtsp_url
@@ -26,6 +29,30 @@ from src.vision.person_tracker import PersonTracker
 logger = logging.getLogger(__name__)
 
 
+class PtzClient(Protocol):
+    def safe_move(self, cmd: Optional[PTZCommand]) -> None:
+        ...
+
+    def stop(self) -> None:
+        ...
+
+    # Опционально для ISAPI-реализации
+    def goto_preset(self, preset_id: int) -> None:
+        ...
+
+    def move_absolute(
+        self,
+        *,
+        pan_deg: Optional[float] = None,
+        tilt_deg: Optional[float] = None,
+        zoom_ratio: Optional[float] = None,
+    ) -> None:
+        ...
+
+    def get_status(self) -> object:
+        ...
+
+
 def run() -> None:
     root = Path(__file__).resolve().parents[2]
     settings = load_settings(root)
@@ -39,7 +66,8 @@ def run() -> None:
     width = settings.raw["app"]["frame_width"]
     height = settings.raw["app"]["frame_height"]
     fps = settings.raw["app"]["process_fps"]
-    step = 1.0 / max(1, fps)
+    loop_pacing = bool(app_cfg.get("loop_pacing_enabled", False))
+    step = 1.0 / max(1, fps) if loop_pacing else 0.0
     detect_every_n_frames = max(1, int(settings.raw["tracking"].get("detect_every_n_frames", 1)))
     detect_every_tracking = max(
         1,
@@ -48,6 +76,12 @@ def run() -> None:
     detect_every_searching = max(
         1,
         int(settings.raw["tracking"].get("detect_every_n_frames_searching", detect_every_n_frames)),
+    )
+    presence_signal_enabled = bool(settings.raw["tracking"].get("camera_presence_signal_enabled", True))
+    presence_signal_window_sec = float(settings.raw["tracking"].get("camera_presence_signal_window_sec", 2.5))
+    detect_every_searching_boost = max(
+        1,
+        int(settings.raw["tracking"].get("detect_every_n_frames_searching_boost", 1)),
     )
     cv_threads = int(app_cfg.get("cv_threads", 0))
     cv2.setUseOptimized(True)
@@ -66,17 +100,35 @@ def run() -> None:
     logger.info("Входной RTSP: %s", in_url)
     logger.info("Выходной RTSP (публикация): %s", out_url)
 
-    reader = RtspReader(settings.input_rtsp, width=width, height=height)
+    stream_cfg = settings.raw.get("stream", {})
+    reader = RtspReader(
+        settings.input_rtsp,
+        width=width,
+        height=height,
+        open_timeout_sec=float(stream_cfg.get("open_timeout_sec", 8.0)),
+        extra_ffmpeg_capture_options=stream_cfg.get("ffmpeg_capture_options_extra"),
+    )
     ptz = _init_ptz_client(
         host=settings.camera_host,
         username=settings.camera_username,
         password=settings.camera_password,
+        ptz_cfg=settings.raw.get("ptz", {}),
         preferred_port=settings.raw.get("ptz", {}).get("onvif_port"),
+        connect_timeout_sec=float(settings.raw.get("ptz", {}).get("onvif_connect_timeout_sec", 1.5)),
     )
     if ptz is None:
         logger.warning("PTZ недоступен: трекинг только по видео, без поворота камеры.")
     else:
-        logger.info("PTZ-клиент ONVIF инициализирован.")
+        logger.info("PTZ-клиент инициализирован.")
+
+    tracking_cfg = settings.raw.get("tracking", {})
+    event_client = _init_event_client(
+        host=settings.camera_host,
+        username=settings.camera_username,
+        password=settings.camera_password,
+        tracking_cfg=tracking_cfg,
+        ptz_cfg=settings.raw.get("ptz", {}),
+    )
 
     tr = settings.raw["tracking"]
     detector = HybridDetector(
@@ -90,30 +142,40 @@ def run() -> None:
             max_aspect_h_w=float(tr.get("max_aspect_h_w", 4.2)),
             yolo_iou=float(tr.get("yolo_iou", 0.5)),
             max_detections=int(tr.get("detector_max_detections", 20)),
+            mediapipe_enabled=bool(tr.get("mediapipe_enabled", True)),
+            mediapipe_min_visibility=float(tr.get("mediapipe_min_visibility", 0.45)),
         ),
-        camera_adapter=CameraAnalyticsAdapter(),
+        camera_adapter=CameraAnalyticsAdapter(event_source=event_client),
         min_confidence=tr["detection_confidence"],
     )
     logger.info(
-        "Детектор: модель=%s, conf>=%s, input_size=%s, max_det=%s, stride(track/search)=%s/%s",
+        "Детектор: модель=%s, conf>=%s, input_size=%s, max_det=%s, stride(track/search/search_boost)=%s/%s/%s, camera_events=%s",
         tr.get("detector_model", "yolo11n.pt"),
         tr["detection_confidence"],
         tr.get("detector_input_size", 640),
         tr.get("detector_max_detections", 20),
         detect_every_tracking,
         detect_every_searching,
+        detect_every_searching_boost,
+        bool(event_client is not None),
     )
 
-    tracker = PersonTracker(timeout_sec=settings.raw["tracking"]["tracking_timeout_sec"])
+    tr_timeout = float(settings.raw["tracking"]["tracking_timeout_sec"])
+    tr_match_px = float(settings.raw["tracking"].get("max_track_match_distance_px", 120.0))
+    tracker = PersonTracker(
+        max_distance_px=tr_match_px,
+        timeout_sec=tr_timeout,
+    )
     selector = TargetSelector()
     registry = ObservationRegistry()
     overlay = OverlayRenderer()
     publisher = RtspPublisher(
-        ffmpeg_bin=settings.raw["stream"]["ffmpeg_bin"],
+        ffmpeg_bin=stream_cfg["ffmpeg_bin"],
         output_rtsp_url=settings.output_rtsp,
         width=width,
         height=height,
         fps=fps,
+        queue_size=int(stream_cfg.get("publisher_queue_size", 1)),
     )
     ptz_cfg = settings.raw["ptz"]
     policy = PtzControlPolicy(
@@ -141,7 +203,9 @@ def run() -> None:
     prev_mode: Optional[TrackingMode] = None
     prev_target_id = None
     monitor_ptz_interval = float(settings.raw["ptz"].get("monitoring_ptz_interval_sec", 0.20))
+    ptz_status_log_interval = float(settings.raw["ptz"].get("status_log_interval_sec", 3.0))
     last_monitor_ptz_ts = 0.0
+    last_ptz_status_log_ts = 0.0
     last_ptz_error_log_ts = 0.0
     read_fail_count = 0
     frame_index = 0
@@ -199,7 +263,14 @@ def run() -> None:
                 logger.info("Приём кадров с камеры стабилен.")
                 stream_ready_logged = True
 
+            camera_presence_signal = bool(
+                presence_signal_enabled
+                and event_client is not None
+                and event_client.has_recent_human_signal(presence_signal_window_sec)
+            )
             detect_stride = detect_every_tracking if mode == TrackingMode.TRACKING else detect_every_searching
+            if mode == TrackingMode.SEARCHING and camera_presence_signal:
+                detect_stride = detect_every_searching_boost
             if frame_index % detect_stride == 0 or not cached_detections:
                 cached_detections = detector.detect(frame)
             detections = cached_detections
@@ -214,11 +285,17 @@ def run() -> None:
             else:
                 mode = TrackingMode.SEARCHING
                 current_target_id = None
+                if prev_mode != TrackingMode.SEARCHING:
+                    _on_enter_search_mode(ptz, ptz_cfg)
                 if ptz is not None and (ts - last_monitor_ptz_ts) >= monitor_ptz_interval:
                     last_ptz_error_log_ts = _safe_ptz_move(
                         ptz, policy.monitoring_command(ts), ts, last_ptz_error_log_ts
                     )
                     last_monitor_ptz_ts = ts
+
+            if ptz is not None and (ts - last_ptz_status_log_ts) >= ptz_status_log_interval:
+                _log_ptz_status(ptz)
+                last_ptz_status_log_ts = ts
 
             if mode != prev_mode or current_target_id != prev_target_id:
                 logger.info(
@@ -246,9 +323,12 @@ def run() -> None:
             if heartbeat_sec > 0 and (ts - last_heartbeat_ts) >= heartbeat_sec:
                 elapsed = ts - last_heartbeat_ts
                 eff_fps = frames_in_heartbeat / elapsed if elapsed > 0 else 0.0
+                det_stats = detector.stats_snapshot()
+                evt_stats = event_client.stats_snapshot() if event_client is not None else None
                 logger.info(
                     "Пульс: режим=%s, цель=%s, кадров=%s, ~%.1f FPS, переподключений=%s, "
-                    "наблюдение всего %.1f с, уник. объектов=%s",
+                    "наблюдение всего %.1f с, уник. объектов=%s, src(camera/local)=%s/%s "
+                    "camera_share=%.2f, camera_signal=%s",
                     mode.name,
                     current_target_id,
                     frame_index,
@@ -256,16 +336,34 @@ def run() -> None:
                     reconnect_events,
                     registry.total_seconds,
                     tracker.total_seen_unique,
+                    det_stats.get("camera_hits", 0),
+                    det_stats.get("local_hits", 0),
+                    float(det_stats.get("camera_share", 0.0)),
+                    camera_presence_signal,
                 )
+                if evt_stats is not None:
+                    logger.debug(
+                        "EventStream stats: total=%s human=%s with_bbox=%s parse_errors=%s",
+                        evt_stats.get("events_total", 0),
+                        evt_stats.get("events_human", 0),
+                        evt_stats.get("events_human_with_bbox", 0),
+                        evt_stats.get("events_parse_errors", 0),
+                    )
                 last_heartbeat_ts = ts
                 frames_in_heartbeat = 0
 
             elapsed = time.time() - loop_started
-            remaining = step - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
+            if step > 0:
+                remaining = step - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
     finally:
         logger.info("Остановка: закрытие PTZ и потоков...")
+        if event_client is not None:
+            try:
+                event_client.stop()
+            except Exception:
+                pass
         if ptz is not None:
             try:
                 ptz.stop()
@@ -278,7 +376,7 @@ def run() -> None:
 
 
 def _safe_ptz_move(
-    ptz: OnvifPtzClient,
+    ptz: PtzClient,
     cmd: PTZCommand,
     ts: float,
     last_error_log_ts: float,
@@ -294,12 +392,84 @@ def _safe_ptz_move(
     return last_error_log_ts
 
 
+def _on_enter_search_mode(ptz: Optional[PtzClient], ptz_cfg: dict) -> None:
+    if ptz is None:
+        return
+    # 1) Возврат в "home" preset, если есть.
+    preset_id = ptz_cfg.get("home_preset_id")
+    if preset_id is not None and hasattr(ptz, "goto_preset"):
+        try:
+            ptz.goto_preset(int(preset_id))
+            logger.info("PTZ: переход в home preset id=%s", preset_id)
+        except Exception as exc:
+            logger.debug("PTZ: home preset недоступен: %s", exc)
+
+    # 2) Дополнительно сбрасываем zoom (для камер с absolute control).
+    if bool(ptz_cfg.get("search_reset_zoom", True)) and hasattr(ptz, "move_absolute"):
+        try:
+            ptz.move_absolute(zoom_ratio=float(ptz_cfg.get("search_home_zoom_ratio", 0.0)))
+            logger.info("PTZ: сброс zoom для режима SEARCHING")
+        except Exception as exc:
+            logger.debug("PTZ: absolute zoom reset недоступен: %s", exc)
+
+
+def _log_ptz_status(ptz: PtzClient) -> None:
+    if not hasattr(ptz, "get_status"):
+        return
+    try:
+        status = ptz.get_status()
+    except Exception:
+        return
+    if status is None:
+        return
+    pan = getattr(status, "pan_deg", None)
+    tilt = getattr(status, "tilt_deg", None)
+    zoom = getattr(status, "zoom_ratio", None)
+    logger.debug("PTZ status: pan=%s tilt=%s zoom=%s", pan, tilt, zoom)
+
+
 def _init_ptz_client(
     host: str,
     username: str,
     password: str,
+    ptz_cfg: dict,
     preferred_port: Optional[int],
-) -> Optional[OnvifPtzClient]:
+    connect_timeout_sec: float = 1.5,
+) -> Optional[PtzClient]:
+    # 1) ISAPI first: быстрее и обычно стабильнее на нативных камерах.
+    if bool(ptz_cfg.get("isapi_enabled", True)):
+        isapi_timeout = float(ptz_cfg.get("isapi_timeout_sec", 2.0))
+        channel_candidates = ptz_cfg.get("isapi_channel_candidates", [1, 101])
+        for channel in channel_candidates:
+            try:
+                channel_id = int(channel)
+            except Exception:
+                continue
+            try:
+                logger.info("Попытка ISAPI PTZ: channel=%s ...", channel_id)
+                isapi = IsapiPtzClient(
+                    host=host,
+                    username=username,
+                    password=password,
+                    channel_id=channel_id,
+                    timeout_sec=isapi_timeout,
+                    use_https=bool(ptz_cfg.get("isapi_use_https", False)),
+                    verify_tls=bool(ptz_cfg.get("isapi_verify_tls", False)),
+                )
+                cap = isapi.capabilities
+                logger.info(
+                    "ISAPI PTZ подключен: channel=%s continuous=%s absolute=%s presets=%s status=%s",
+                    channel_id,
+                    cap.supports_continuous,
+                    cap.supports_absolute,
+                    cap.supports_presets,
+                    cap.supports_status,
+                )
+                return isapi
+            except Exception as exc:
+                logger.debug("ISAPI channel=%s недоступен: %s", channel_id, exc)
+
+    # 2) Fallback to ONVIF
     ports = []
     if isinstance(preferred_port, int):
         ports.append(preferred_port)
@@ -311,13 +481,70 @@ def _init_ptz_client(
     for port in ports:
         try:
             logger.info("Попытка ONVIF на %s:%s...", host, port)
-            return OnvifPtzClient(host, username, password, port=port)
+            result: dict[str, object] = {}
+
+            def _build_client() -> None:
+                try:
+                    result["client"] = OnvifPtzClient(host, username, password, port=port)
+                except Exception as exc:
+                    result["error"] = exc
+
+            t = threading.Thread(target=_build_client, daemon=True, name=f"onvif-init-{port}")
+            t.start()
+            t.join(timeout=max(0.1, connect_timeout_sec))
+
+            if t.is_alive():
+                last_error = RuntimeError(
+                    f"ONVIF connect timeout after {connect_timeout_sec:.1f}s on port {port}"
+                )
+                logger.warning("ONVIF порт %s: таймаут подключения (%.1f c)", port, connect_timeout_sec)
+                continue
+
+            if "client" in result:
+                return result["client"]  # type: ignore[return-value]
+
+            if "error" in result:
+                raise result["error"]  # type: ignore[misc]
         except Exception as exc:
             last_error = exc
             logger.debug("ONVIF порт %s: %s", port, exc)
 
     logger.warning("ONVIF недоступен, работа без PTZ: %s", last_error)
     return None
+
+
+def _init_event_client(
+    host: str,
+    username: str,
+    password: str,
+    tracking_cfg: dict,
+    ptz_cfg: dict,
+) -> Optional[IsapiEventStreamClient]:
+    if not bool(tracking_cfg.get("camera_events_enabled", True)):
+        logger.info("Camera events disabled by config")
+        return None
+
+    try:
+        client = IsapiEventStreamClient(
+            host=host,
+            username=username,
+            password=password,
+            use_https=bool(ptz_cfg.get("isapi_use_https", False)),
+            verify_tls=bool(ptz_cfg.get("isapi_verify_tls", False)),
+            connect_timeout_sec=float(tracking_cfg.get("camera_events_connect_timeout_sec", 2.0)),
+            read_timeout_sec=float(tracking_cfg.get("camera_events_read_timeout_sec", 15.0)),
+            max_age_sec=float(tracking_cfg.get("camera_events_max_age_sec", 1.2)),
+            debug_samples_enabled=bool(tracking_cfg.get("camera_events_debug_samples_enabled", False)),
+            debug_samples_limit=int(tracking_cfg.get("camera_events_debug_samples_limit", 10)),
+            capability_probe_enabled=bool(tracking_cfg.get("camera_events_capability_probe_enabled", True)),
+            auto_configure_enabled=bool(tracking_cfg.get("camera_events_auto_configure_enabled", False)),
+            auto_configure_dry_run=bool(tracking_cfg.get("camera_events_auto_configure_dry_run", False)),
+        )
+        client.start()
+        return client
+    except Exception as exc:
+        logger.warning("Camera event stream unavailable, fallback to local detector: %s", exc)
+        return None
 
 
 if __name__ == "__main__":

@@ -1,6 +1,10 @@
-opencv-python==4.10.0.84
-numpy==1.26.4
+# Один пакет cv2: contrib удовлетворяет ultralytics (opencv-python>=4.6) и mediapipe
+opencv-contrib-python>=4.10.0,<5
+numpy>=1.23.0
 python-dotenv==1.0.1
 PyYAML==6.0.2
 onvif-zeep==0.2.12
-ultralytics==8.3.0
+# 8.3.0 требовал numpy<2; с 8.3.4 — numpy>=1.23 без верхней границы (совместимо с mediapipe/opencv-contrib)
+ultralytics>=8.3.4,<9
+requests==2.33.1
+mediapipe

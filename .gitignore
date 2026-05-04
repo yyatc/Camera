@@ -8,3 +8,6 @@ config/secrets.env
 *.tmp
 *.pt
 runtime-logs/
+# Локальный portable MediaMTX (скачивается вручную для тестов на Windows)
+tools/mediamtx/mediamtx.exe
+tools/mediamtx/mediamtx.zip

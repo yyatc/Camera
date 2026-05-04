@@ -35,6 +35,9 @@ class PtzPolicyConfig:
 class PtzControlPolicy:
     def __init__(self, cfg: PtzPolicyConfig) -> None:
         self._cfg = cfg
+        self._last_burst_bucket: Optional[int] = None
+        self._burst_pan = 0.0
+        self._burst_tilt = 0.0
 
     def tracking_command(
         self,
@@ -76,12 +79,32 @@ class PtzControlPolicy:
 
     def monitoring_command(self, ts: float) -> PTZCommand:
         """
-        Мягкий мониторинг: плавные pan/tilt колебания + импульсный zoom-out.
+        Хаотичное сканирование: смена направлений, амплитуды и короткие "рывки".
         """
-        jx = uniform(-0.20, 0.20)
-        jy = uniform(-0.20, 0.20)
-        pan = 0.7 * self._cfg.search_pan_speed * math.sin(ts * 0.24) + jx * self._cfg.search_pan_speed
-        tilt = 0.7 * self._cfg.search_tilt_speed * math.cos(ts * 0.20) + jy * self._cfg.search_tilt_speed
+        # Базовая кривая с двумя разными частотами, чтобы не "залипать" в одном секторе.
+        base_pan = (
+            0.85 * self._cfg.search_pan_speed * math.sin(ts * 0.65)
+            + 0.35 * self._cfg.search_pan_speed * math.sin(ts * 1.40 + 1.1)
+        )
+        base_tilt = (
+            0.80 * self._cfg.search_tilt_speed * math.cos(ts * 0.58 + 0.6)
+            + 0.30 * self._cfg.search_tilt_speed * math.sin(ts * 1.15)
+        )
+
+        # Периодическая инверсия сектора (примерно каждые 7 секунд).
+        sector_sign = -1.0 if int(ts / 7.0) % 2 else 1.0
+        pan = base_pan * sector_sign
+        tilt = base_tilt * (-sector_sign if int(ts / 11.0) % 2 else sector_sign)
+
+        # Короткие случайные "рывки" направления каждые ~1.6 сек.
+        burst_bucket = int(ts / 1.6)
+        if self._last_burst_bucket != burst_bucket:
+            self._last_burst_bucket = burst_bucket
+            self._burst_pan = uniform(-0.45, 0.45) * self._cfg.search_pan_speed
+            self._burst_tilt = uniform(-0.40, 0.40) * self._cfg.search_tilt_speed
+        pan += self._burst_pan
+        tilt += self._burst_tilt
+
         pan = _clip(pan, self._cfg.max_pan_speed)
         tilt = _clip(tilt, self._cfg.max_tilt_speed)
         zoom_speed = self._cfg.search_zoom_out_speed if int(ts * 2) % 4 == 0 else 0.0

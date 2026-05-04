@@ -1,46 +1,73 @@
 app:
   frame_width: 640
   frame_height: 360
-  process_fps: 20
+  process_fps: 28
+  loop_pacing_enabled: false
   cv_threads: 2
   log_level: INFO
   heartbeat_interval_sec: 5.0
 
 tracking:
-  detection_confidence: 0.52
+  detection_confidence: 0.45
   tracking_timeout_sec: 2.5
   detector_model: "yolo11n.pt"
   detect_every_n_frames: 1
   detect_every_n_frames_tracking: 1
   detect_every_n_frames_searching: 2
-  detector_input_size: 448
+  detector_input_size: 416
+  max_track_match_distance_px: 200
   detector_max_detections: 20
+  mediapipe_enabled: true
+  mediapipe_min_visibility: 0.45
   min_bbox_area_ratio: 0.005
   max_bbox_area_ratio: 0.72
   min_aspect_h_w: 0.9
   max_aspect_h_w: 4.0
   yolo_iou: 0.5
-  center_tolerance_x: 0.09
-  center_tolerance_y: 0.09
+  center_tolerance_x: 0.04
+  center_tolerance_y: 0.04
   target_area_ratio: 0.15
   zoom_hysteresis: 0.10
+  camera_events_enabled: true
+  camera_events_connect_timeout_sec: 2.0
+  camera_events_read_timeout_sec: 15.0
+  camera_events_max_age_sec: 1.2
+  camera_events_debug_samples_enabled: true
+  camera_events_debug_samples_limit: 12
+  camera_events_capability_probe_enabled: true
+  camera_events_auto_configure_enabled: true
+  camera_events_auto_configure_dry_run: false
+  camera_presence_signal_enabled: true
+  camera_presence_signal_window_sec: 2.5
+  detect_every_n_frames_searching_boost: 1
 
 ptz:
-  pan_gain: 1.2
-  tilt_gain: 1.0
-  zoom_gain: 0.32
+  isapi_enabled: true
+  isapi_channel_candidates: [1, 101]
+  isapi_timeout_sec: 2.0
+  isapi_use_https: false
+  isapi_verify_tls: false
+  home_preset_id: 1
+  search_reset_zoom: true
+  search_home_zoom_ratio: 0.0
+  status_log_interval_sec: 3.0
+  pan_gain: 1.55
+  tilt_gain: 1.15
+  zoom_gain: 0.0
   max_pan_speed: 0.55
   max_tilt_speed: 0.45
-  max_zoom_speed: 0.18
+  max_zoom_speed: 0.0
   min_effective_pan_speed: 0.07
   min_effective_tilt_speed: 0.07
-  search_pan_speed: 0.06
-  search_tilt_speed: 0.035
+  search_pan_speed: 0.30
+  search_tilt_speed: 0.18
   search_zoom_out_speed: -0.10
-  monitoring_ptz_interval_sec: 0.20
+  onvif_connect_timeout_sec: 1.5
+  monitoring_ptz_interval_sec: 0.15
 
 stream:
-  input_rtsp: "rtsp://{CAMERA_USERNAME}:{CAMERA_PASSWORD}@{CAMERA_HOST}:554/stream1"
+  input_rtsp: "rtsp://{CAMERA_USERNAME}:{CAMERA_PASSWORD}@{CAMERA_HOST}:554/Streaming/Channels/101"
   output_rtsp: "rtsp://mediamtx:8554/tracking"
   mediamtx_push_path: "tracking"
   ffmpeg_bin: "ffmpeg"
+  publisher_queue_size: 1

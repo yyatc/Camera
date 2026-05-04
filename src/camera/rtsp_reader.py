@@ -18,10 +18,20 @@ _FRAME_STALE_SEC = 2.0
 
 
 class RtspReader:
-    def __init__(self, url: str, width: int, height: int) -> None:
+    def __init__(
+        self,
+        url: str,
+        width: int,
+        height: int,
+        open_timeout_sec: float = 8.0,
+        *,
+        extra_ffmpeg_capture_options: str | None = None,
+    ) -> None:
         self._url = url
         self._width = width
         self._height = height
+        self._open_timeout_sec = max(0.5, float(open_timeout_sec))
+        self._extra_ffmpeg_capture_options = (extra_ffmpeg_capture_options or "").strip()
         self._cap: Optional[cv2.VideoCapture] = None
         self._lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
@@ -30,16 +40,38 @@ class RtspReader:
         self._thread: Optional[threading.Thread] = None
 
     def open(self) -> None:
-        # Стабильнее для IP-камер: принудительно TCP-транспорт + таймауты.
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-            "rtsp_transport;tcp|stimeout;5000000|max_delay;500000|reorder_queue_size;0"
+        # TCP + низкая задержка: уменьшаем reorder/max_delay, probesize для быстрого старта.
+        base = (
+            "rtsp_transport;tcp|stimeout;5000000|max_delay;250000|reorder_queue_size;0|"
+            "fflags;nobuffer|flags;low_delay|probesize;500000|analyzeduration;500000"
         )
+        if self._extra_ffmpeg_capture_options:
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = base + "|" + self._extra_ffmpeg_capture_options
+        else:
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = base
         safe = sanitize_rtsp_url(self._url)
         logger.info("Открытие входного потока %s (целевой размер %dx%d)", safe, self._width, self._height)
-        self._cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
-        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+        result: dict[str, object] = {}
+
+        def _open_capture() -> None:
+            cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+            result["cap"] = cap
+
+        opener = threading.Thread(target=_open_capture, daemon=True, name="rtsp-open")
+        opener.start()
+        opener.join(timeout=self._open_timeout_sec)
+        if opener.is_alive():
+            logger.error("Таймаут открытия входного потока: %s (%.1f c)", safe, self._open_timeout_sec)
+            raise RuntimeError(f"RTSP open timeout after {self._open_timeout_sec:.1f}s: {self._url}")
+
+        cap = result.get("cap")
+        if not isinstance(cap, cv2.VideoCapture):
+            logger.error("Не удалось инициализировать VideoCapture: %s", safe)
+            raise RuntimeError(f"Unable to init RTSP capture: {self._url}")
+        self._cap = cap
         if not self._cap.isOpened():
             logger.error("Не удалось открыть входной поток: %s", safe)
             raise RuntimeError(f"Unable to open RTSP stream: {self._url}")

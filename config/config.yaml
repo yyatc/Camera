@@ -1,7 +1,10 @@
 app:
   frame_width: 640
   frame_height: 360
-  process_fps: 22
+  # Для libx264 -r (номинальный FPS выхода). При loop_pacing_enabled=false цикл не искусственно замедляется.
+  process_fps: 28
+  # true: спать до 1/process_fps между кадрами (ровнее поток, больше задержка). false: минимальная задержка.
+  loop_pacing_enabled: false
   # Число потоков OpenCV (0 = оставить автонастройку OpenCV).
   cv_threads: 0
   # Уровень логов: DEBUG, INFO, WARNING, ERROR (перекрывается переменной окружения LOG_LEVEL).
@@ -11,45 +14,84 @@ app:
 
 tracking:
   # Выше порог — меньше ложных «людей» на шуме/мелочи (класс COCO id=0 только в YOLO).
-  detection_confidence: 0.52
+  detection_confidence: 0.45
   tracking_timeout_sec: 2.5
   detector_model: "yolo11n.pt"
   detect_every_n_frames: 1
   # В TRACKING можно чаще считать детекцию, в SEARCHING реже для экономии CPU.
   detect_every_n_frames_tracking: 1
   detect_every_n_frames_searching: 2
-  detector_input_size: 512
+  detector_input_size: 416
+  # Сопоставление детекции с треком (пиксели); больше — устойчивее при быстром движении / PTZ.
+  max_track_match_distance_px: 200
   # Ограничение числа боксов от детектора (уменьшает постобработку на CPU).
   detector_max_detections: 20
+  # Дополнительный локальный детектор (повышает шанс захвата цели при сложном свете/ракурсе).
+  mediapipe_enabled: true
+  mediapipe_min_visibility: 0.45
   # Отсекаем слишком маленькие/большие и нетипичные по форме боксы (мусор).
   min_bbox_area_ratio: 0.005
   max_bbox_area_ratio: 0.72
   min_aspect_h_w: 0.9
   max_aspect_h_w: 4.0
   yolo_iou: 0.5
-  center_tolerance_x: 0.09
-  center_tolerance_y: 0.09
+  center_tolerance_x: 0.04
+  center_tolerance_y: 0.04
   target_area_ratio: 0.15
   zoom_hysteresis: 0.10
+  # События камеры как первичный источник детекций (alertStream), YOLO остаётся fallback.
+  camera_events_enabled: true
+  camera_events_connect_timeout_sec: 2.0
+  camera_events_read_timeout_sec: 15.0
+  camera_events_max_age_sec: 1.2
+  # Диагностика формата событий камеры: логировать первые N примеров.
+  camera_events_debug_samples_enabled: true
+  camera_events_debug_samples_limit: 12
+  # Активная проверка популярных ISAPI endpoints с capability/trigger перед запуском alertStream.
+  camera_events_capability_probe_enabled: true
+  # Автоконфигуратор smart-детекторов на камере (best-effort, безопасно пропускает недоступные API).
+  camera_events_auto_configure_enabled: true
+  # Если true — только показать, что изменилось бы, без фактического PUT на камеру.
+  camera_events_auto_configure_dry_run: false
+  # Использовать событие камеры (без bbox) как "сигнал присутствия человека".
+  camera_presence_signal_enabled: true
+  camera_presence_signal_window_sec: 2.5
+  # В SEARCHING при активном сигнале камеры повышаем частоту локальной детекции.
+  detect_every_n_frames_searching_boost: 1
 
 ptz:
-  pan_gain: 1.2
-  tilt_gain: 1.0
-  zoom_gain: 0.32
+  # Предпочтительный путь управления PTZ: ISAPI (если доступен), иначе ONVIF.
+  isapi_enabled: true
+  isapi_channel_candidates: [1, 101]
+  isapi_timeout_sec: 2.0
+  isapi_use_https: false
+  isapi_verify_tls: false
+  home_preset_id: 1
+  search_reset_zoom: true
+  search_home_zoom_ratio: 0.0
+  status_log_interval_sec: 3.0
+  pan_gain: 1.55
+  tilt_gain: 1.15
+  zoom_gain: 0.0
   max_pan_speed: 0.55
   max_tilt_speed: 0.45
-  max_zoom_speed: 0.18
+  max_zoom_speed: 0.0
   # Минимальная скорость, ниже которой мотор физически не двигается.
   # Если команда ненулевая, но меньше этого порога — поднимаем до порога.
   min_effective_pan_speed: 0.07
   min_effective_tilt_speed: 0.07
-  search_pan_speed: 0.06
-  search_tilt_speed: 0.035
+  search_pan_speed: 0.30
+  search_tilt_speed: 0.18
   search_zoom_out_speed: -0.10
-  monitoring_ptz_interval_sec: 0.20
+  onvif_connect_timeout_sec: 1.5
+  monitoring_ptz_interval_sec: 0.15
 
 stream:
-  input_rtsp: "rtsp://{CAMERA_USERNAME}:{CAMERA_PASSWORD}@{CAMERA_HOST}:554/stream1"
+  input_rtsp: "rtsp://{CAMERA_USERNAME}:{CAMERA_PASSWORD}@{CAMERA_HOST}:554/Streaming/Channels/101"
   output_rtsp: "rtsp://127.0.0.1:8554/tracking"
   mediamtx_push_path: "tracking"
   ffmpeg_bin: "ffmpeg"
+  # Очередь перед ffmpeg: 1 = всегда самый свежий кадр (меньше отставания при медленном кодировании).
+  publisher_queue_size: 1
+  # Доп. опции OpenCV/FFmpeg для входа (через |), см. RtspReader.
+  # ffmpeg_capture_options_extra: ""

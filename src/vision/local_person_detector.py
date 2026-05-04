@@ -12,6 +12,11 @@ try:
 except Exception:  # pragma: no cover
     YOLO = None
 
+try:
+    import mediapipe as mp
+except Exception:  # pragma: no cover
+    mp = None
+
 
 class LocalPersonDetector:
     def __init__(
@@ -25,6 +30,8 @@ class LocalPersonDetector:
         max_aspect_h_w: float = 4.2,
         yolo_iou: float = 0.5,
         max_detections: int = 20,
+        mediapipe_enabled: bool = True,
+        mediapipe_min_visibility: float = 0.45,
     ) -> None:
         self._confidence = confidence
         self._input_size = input_size
@@ -34,14 +41,32 @@ class LocalPersonDetector:
         self._max_aspect_h_w = max_aspect_h_w
         self._yolo_iou = yolo_iou
         self._max_detections = max(1, int(max_detections))
+        self._mediapipe_enabled = bool(mediapipe_enabled)
+        self._mediapipe_min_visibility = float(mediapipe_min_visibility)
         self._model = YOLO(model_name) if YOLO else None
         self._hog = cv2.HOGDescriptor()
         self._hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        self._pose = None
+        if self._mediapipe_enabled and mp is not None:
+            try:
+                self._pose = mp.solutions.pose.Pose(
+                    static_image_mode=False,
+                    model_complexity=0,
+                    enable_segmentation=False,
+                    min_detection_confidence=max(0.2, min(0.9, self._confidence)),
+                    min_tracking_confidence=max(0.2, min(0.9, self._confidence * 0.9)),
+                )
+            except Exception:
+                self._pose = None
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
+        detections: List[Detection] = []
         if self._model is not None:
-            return self._detect_yolo(frame)
-        return self._detect_hog(frame)
+            detections.extend(self._detect_yolo(frame))
+        else:
+            detections.extend(self._detect_hog(frame))
+        detections.extend(self._detect_mediapipe(frame))
+        return self._deduplicate(detections)
 
     def _detect_yolo(self, frame: np.ndarray) -> List[Detection]:
         detections: List[Detection] = []
@@ -96,3 +121,74 @@ class LocalPersonDetector:
             x1, y1, x2, y2 = int(x), int(y), int(x + w), int(y + h)
             detections.append(Detection(bbox=(x1, y1, x2, y2), confidence=conf, source="local_hog"))
         return detections
+
+    def _detect_mediapipe(self, frame: np.ndarray) -> List[Detection]:
+        if self._pose is None:
+            return []
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        result = self._pose.process(rgb)
+        if result.pose_landmarks is None:
+            return []
+
+        h, w = frame.shape[:2]
+        xs: List[float] = []
+        ys: List[float] = []
+        visibility_sum = 0.0
+        visibility_count = 0
+        for lm in result.pose_landmarks.landmark:
+            vis = float(getattr(lm, "visibility", 1.0))
+            if vis < self._mediapipe_min_visibility:
+                continue
+            visibility_sum += vis
+            visibility_count += 1
+            xs.append(float(lm.x))
+            ys.append(float(lm.y))
+
+        if visibility_count < 6:
+            return []
+
+        x1n, x2n = min(xs), max(xs)
+        y1n, y2n = min(ys), max(ys)
+        # Немного расширяем bbox, чтобы накрыть человека полностью.
+        pad_x = (x2n - x1n) * 0.20
+        pad_y = (y2n - y1n) * 0.25
+        x1n = max(0.0, x1n - pad_x)
+        y1n = max(0.0, y1n - pad_y)
+        x2n = min(1.0, x2n + pad_x)
+        y2n = min(1.0, y2n + pad_y)
+
+        x1, y1, x2, y2 = int(x1n * w), int(y1n * h), int(x2n * w), int(y2n * h)
+        frame_area = float(max(1, w * h))
+        if not self._is_plausible_person_bbox(x1, y1, x2, y2, frame_area):
+            return []
+        conf = min(0.99, max(0.35, visibility_sum / visibility_count))
+        return [Detection(bbox=(x1, y1, x2, y2), confidence=conf, source="local_mediapipe")]
+
+    def _deduplicate(self, detections: List[Detection]) -> List[Detection]:
+        if not detections:
+            return []
+        out: List[Detection] = []
+        # Сначала более уверенные боксы.
+        for d in sorted(detections, key=lambda x: x.confidence, reverse=True):
+            keep = True
+            for e in out:
+                if _iou(d.bbox, e.bbox) >= 0.55:
+                    keep = False
+                    break
+            if keep:
+                out.append(d)
+        return out
+
+
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(1, (ax2 - ax1) * (ay2 - ay1))
+    area_b = max(1, (bx2 - bx1) * (by2 - by1))
+    return inter / float(area_a + area_b - inter)
