@@ -14,6 +14,7 @@ from src.camera.isapi_event_stream import IsapiEventStreamClient
 from src.camera.onvif_client import OnvifPtzClient
 from src.camera.rtsp_reader import RtspReader
 from src.common.logging_setup import configure_logging, sanitize_rtsp_url
+from src.common.ml_device import resolve_inference_device
 from src.common.types import PTZCommand
 from src.common.settings import load_settings
 from src.domain.ptz_control_policy import PtzPolicyConfig, PtzControlPolicy
@@ -131,6 +132,12 @@ def run() -> None:
     )
 
     tr = settings.raw["tracking"]
+    env_ml = os.getenv("ML_DEVICE")
+    if env_ml is not None and str(env_ml).strip():
+        ml_spec = str(env_ml).strip()
+    else:
+        ml_spec = str(tr.get("inference_device", "auto")).strip() or "auto"
+    inference_device = resolve_inference_device(ml_spec)
     detector = HybridDetector(
         local_detector=LocalPersonDetector(
             tr["detection_confidence"],
@@ -144,12 +151,14 @@ def run() -> None:
             max_detections=int(tr.get("detector_max_detections", 20)),
             mediapipe_enabled=bool(tr.get("mediapipe_enabled", True)),
             mediapipe_min_visibility=float(tr.get("mediapipe_min_visibility", 0.45)),
+            inference_device=inference_device,
         ),
         camera_adapter=CameraAnalyticsAdapter(event_source=event_client),
         min_confidence=tr["detection_confidence"],
     )
     logger.info(
-        "Детектор: модель=%s, conf>=%s, input_size=%s, max_det=%s, stride(track/search/search_boost)=%s/%s/%s, camera_events=%s",
+        "Детектор: модель=%s, conf>=%s, input_size=%s, max_det=%s, stride(track/search/search_boost)=%s/%s/%s, "
+        "camera_events=%s, ml_device=%s (запрос=%s)",
         tr.get("detector_model", "yolo11n.pt"),
         tr["detection_confidence"],
         tr.get("detector_input_size", 640),
@@ -158,6 +167,8 @@ def run() -> None:
         detect_every_searching,
         detect_every_searching_boost,
         bool(event_client is not None),
+        inference_device,
+        ml_spec,
     )
 
     tr_timeout = float(settings.raw["tracking"]["tracking_timeout_sec"])

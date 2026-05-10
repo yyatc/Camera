@@ -27,5 +27,7 @@ services:
     environment:
       CONFIG_PATH: config/config.docker.yaml
       SECRETS_PATH: config/secrets.env
+      # Пусто = из config; иначе: auto | cpu | 0 | cuda:0 | mps
+      ML_DEVICE: ${ML_DEVICE:-}
     volumes:
       - ./config/secrets.env:/app/config/secrets.env:ro

@@ -8,6 +8,8 @@ app:
   heartbeat_interval_sec: 5.0
 
 tracking:
+  # auto: CUDA если есть в образе torch+CUDA, иначе CPU. Переопределение: ML_DEVICE в environment.
+  inference_device: auto
   detection_confidence: 0.45
   tracking_timeout_sec: 2.5
   detector_model: "yolo11n.pt"

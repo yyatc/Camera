@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from typing import List
 
 import cv2
 import numpy as np
 
 from src.common.types import Detection
+
+logger = logging.getLogger(__name__)
 
 try:
     from ultralytics import YOLO
@@ -32,6 +35,7 @@ class LocalPersonDetector:
         max_detections: int = 20,
         mediapipe_enabled: bool = True,
         mediapipe_min_visibility: float = 0.45,
+        inference_device: str = "cpu",
     ) -> None:
         self._confidence = confidence
         self._input_size = input_size
@@ -43,7 +47,19 @@ class LocalPersonDetector:
         self._max_detections = max(1, int(max_detections))
         self._mediapipe_enabled = bool(mediapipe_enabled)
         self._mediapipe_min_visibility = float(mediapipe_min_visibility)
+        self._inference_device = (inference_device or "cpu").strip() or "cpu"
         self._model = YOLO(model_name) if YOLO else None
+        if self._model is not None and self._inference_device != "cpu":
+            try:
+                self._model.to(self._inference_device)
+                logger.info("YOLO веса перенесены на устройство: %s", self._inference_device)
+            except Exception as exc:
+                logger.warning(
+                    "YOLO .to(%s) не удалось (%s); predict(..., device=%s)",
+                    self._inference_device,
+                    exc,
+                    self._inference_device,
+                )
         self._hog = cv2.HOGDescriptor()
         self._hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
         self._pose = None
@@ -77,7 +93,7 @@ class LocalPersonDetector:
             iou=self._yolo_iou,
             imgsz=self._input_size,
             max_det=self._max_detections,
-            device="cpu",
+            device=self._inference_device,
             verbose=False,
         )
         fh, fw = frame.shape[0], frame.shape[1]
