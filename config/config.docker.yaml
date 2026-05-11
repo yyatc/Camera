@@ -73,3 +73,12 @@ stream:
   mediamtx_push_path: "tracking"
   ffmpeg_bin: "ffmpeg"
   publisher_queue_size: 1
+  # Таймаут открытия входного RTSP потока (сек)
+  open_timeout_sec: 8.0
+  # Порог переподключения: сколько подряд пустых кадров допускается перед переподключением.
+  # При 28 FPS: 30 = ~1 сек, 150 = ~5 сек, 280 = ~10 сек.
+  # Увеличьте если камера медленно поднимает поток (например Hikvision при старте).
+  reconnect_threshold_frames: 150
+  # Дополнительные опции ffmpeg для захвата входного потока (через пробел).
+  # Пример для принудительного TCP: "-rtsp_transport tcp"
+  # ffmpeg_capture_options_extra: ""
