@@ -218,6 +218,7 @@ def run() -> None:
     last_monitor_ptz_ts = 0.0
     last_ptz_status_log_ts = 0.0
     last_ptz_error_log_ts = 0.0
+    reconnect_threshold = int(stream_cfg.get("reconnect_threshold_frames", 30))
     read_fail_count = 0
     frame_index = 0
     cached_detections = []
@@ -236,14 +237,14 @@ def run() -> None:
             ok, frame = reader.read()
             if not ok:
                 read_fail_count += 1
-                if read_fail_count == 1 or read_fail_count % 30 == 0:
+                if read_fail_count == 1 or read_fail_count % reconnect_threshold == 0:
                     logger.warning(
                         "Нет кадра с входа (подряд: %s), ожидание...",
                         read_fail_count,
                     )
                 # При длительном отсутствии кадров переподключаемся к RTSP камеры,
                 # иначе MediaMTX закрывает исходящий publisher как неактивный.
-                if read_fail_count >= 30:
+                if read_fail_count >= reconnect_threshold:
                     logger.warning(
                         "Переподключение к входному RTSP после %s неудачных чтений...",
                         read_fail_count,
