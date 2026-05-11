@@ -25,6 +25,13 @@ services:
     environment:
       CONFIG_PATH: config/config.docker.yaml
       SECRETS_PATH: config/secrets.env
-      ML_DEVICE: ${ML_DEVICE:-}
+      ML_DEVICE: "0"
     volumes:
       - ./config/secrets.env:/app/config/secrets.env:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
