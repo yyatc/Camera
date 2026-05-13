@@ -13,6 +13,40 @@ from src.common.logging_setup import sanitize_rtsp_url
 logger = logging.getLogger(__name__)
 
 
+
+def _detect_encoder(ffmpeg_bin: str) -> list:
+    """
+    Auto-detects the best available H.264 encoder.
+    Priority: h264_nvenc (NVIDIA GPU) > libx264 (CPU fallback).
+    NVENC encodes on a dedicated GPU block, freeing CUDA cores for inference.
+    """
+    try:
+        result = subprocess.run(
+            [ffmpeg_bin, "-encoders"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if "h264_nvenc" in result.stdout:
+            logger.info("Encoder: h264_nvenc (NVIDIA NVENC)")
+            return [
+                "-c:v", "h264_nvenc",
+                "-preset", "p1",   # p1=lowest latency
+                "-tune", "ll",     # low-latency mode
+                "-zerolatency", "1",
+                "-rc", "cbr",
+                "-b:v", "4M",
+                "-maxrate", "4M",
+                "-bufsize", "500k",
+            ]
+    except Exception as exc:
+        logger.debug("Encoder probe failed: %s", exc)
+    logger.info("Encoder: libx264 (CPU fallback)")
+    return [
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-tune", "zerolatency",
+        "-x264-params", "sync-lookahead=0:rc-lookahead=0",
+    ]
+
 class RtspPublisher:
     """Публикация raw BGR в ffmpeg → RTSP. Очередь на 1 кадр: при отставании кодера отбрасываем старые кадры."""
 
@@ -48,6 +82,7 @@ class RtspPublisher:
             self._fps,
             self._queue_size,
         )
+        encoder_args = _detect_encoder(self._ffmpeg_bin)
         cmd = [
             self._ffmpeg_bin,
             "-loglevel",
@@ -63,12 +98,7 @@ class RtspPublisher:
             "-i",
             "-",
             "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-tune",
-            "zerolatency",
+            *encoder_args,
             "-bf",
             "0",
             "-g",
@@ -77,8 +107,6 @@ class RtspPublisher:
             "1",
             "-pix_fmt",
             "yuv420p",
-            "-x264-params",
-            "sync-lookahead=0:rc-lookahead=0",
             "-fflags",
             "nobuffer",
             "-flags",
