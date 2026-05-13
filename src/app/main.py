@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,51 @@ from src.vision.local_person_detector import LocalPersonDetector
 from src.vision.person_tracker import PersonTracker
 
 logger = logging.getLogger(__name__)
+
+
+
+class AsyncDetector:
+    """
+    Wrapper over HybridDetector — runs inference in a separate thread.
+    Main loop calls submit() and continues immediately without waiting.
+    Always uses the last ready result via .latest.
+    Eliminates main loop freezes caused by YOLO inference spikes.
+    """
+
+    def __init__(self, detector) -> None:
+        self._detector = detector
+        self._input: queue.Queue = queue.Queue(maxsize=1)
+        self._latest = []
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="detector")
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while True:
+            frame = self._input.get()
+            if frame is None:
+                break
+            try:
+                result = self._detector.detect(frame)
+                with self._lock:
+                    self._latest = result
+            except Exception as exc:
+                logger.error("Detector error: %s", exc)
+
+    def submit(self, frame) -> None:
+        try:
+            self._input.put_nowait(frame)
+        except queue.Full:
+            pass  # detector is busy — use cached result
+
+    @property
+    def latest(self):
+        with self._lock:
+            return list(self._latest)
+
+    def stop(self) -> None:
+        self._input.put(None)
+        self._thread.join(timeout=5.0)
 
 
 class PtzClient(Protocol):
@@ -156,6 +202,7 @@ def run() -> None:
         camera_adapter=CameraAnalyticsAdapter(event_source=event_client),
         min_confidence=tr["detection_confidence"],
     )
+    detector = AsyncDetector(detector)
     logger.info(
         "Детектор: модель=%s, conf>=%s, input_size=%s, max_det=%s, stride(track/search/search_boost)=%s/%s/%s, "
         "camera_events=%s, ml_device=%s (запрос=%s)",
@@ -283,9 +330,10 @@ def run() -> None:
             detect_stride = detect_every_tracking if mode == TrackingMode.TRACKING else detect_every_searching
             if mode == TrackingMode.SEARCHING and camera_presence_signal:
                 detect_stride = detect_every_searching_boost
-            if frame_index % detect_stride == 0 or not cached_detections:
-                cached_detections = detector.detect(frame)
-            detections = cached_detections
+            if frame_index % detect_stride == 0:
+                detector.submit(frame)
+            detections = detector.latest or cached_detections
+            cached_detections = detections
             tracks = tracker.update(detections, ts=ts)
             target = selector.choose_target(tracks, preferred_id=current_target_id)
             if target is not None:
@@ -370,6 +418,7 @@ def run() -> None:
                 if remaining > 0:
                     time.sleep(remaining)
     finally:
+        detector.stop()
         logger.info("Остановка: закрытие PTZ и потоков...")
         if event_client is not None:
             try:
