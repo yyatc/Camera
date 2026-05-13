@@ -72,9 +72,9 @@ class RtspPublisher:
             "-bf",
             "0",
             "-g",
-            str(self._fps),
+            "1",  # keyframe every frame — minimizes decoder buffer delay
             "-keyint_min",
-            str(self._fps),
+            "1",
             "-pix_fmt",
             "yuv420p",
             "-x264-params",
