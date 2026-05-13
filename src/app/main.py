@@ -274,6 +274,13 @@ def run() -> None:
     frames_in_heartbeat = 0
     reconnect_events = 0
 
+    # --- Profiler state ---
+    _prof_read_ms: list = []
+    _prof_track_ms: list = []
+    _prof_render_ms: list = []
+    _prof_publish_ms: list = []
+    _PROF_SPIKE_MS = 50.0   # warn if any stage exceeds this threshold
+
     reader.open()
     publisher.open()
     logger.info("Главный цикл запущен (Ctrl+C для остановки).")
@@ -281,7 +288,9 @@ def run() -> None:
         while True:
             loop_started = time.time()
             ts = time.time()
+            _t0 = time.perf_counter()
             ok, frame = reader.read()
+            _prof_read_ms.append((time.perf_counter() - _t0) * 1000)
             if not ok:
                 read_fail_count += 1
                 if read_fail_count == 1 or read_fail_count % reconnect_threshold == 0:
@@ -322,6 +331,7 @@ def run() -> None:
                 logger.info("Приём кадров с камеры стабилен.")
                 stream_ready_logged = True
 
+            _t1 = time.perf_counter()
             camera_presence_signal = bool(
                 presence_signal_enabled
                 and event_client is not None
@@ -368,8 +378,10 @@ def run() -> None:
                 prev_mode = mode
                 prev_target_id = current_target_id
 
+            _prof_track_ms.append((time.perf_counter() - _t1) * 1000)
             registry.tick(current_target_id, ts=ts)
 
+            _t2 = time.perf_counter()
             rendered = overlay.render(
                 frame=frame,
                 target=target,
@@ -378,11 +390,37 @@ def run() -> None:
                 total_seconds=registry.total_seconds,
                 first_seen_ts=tracker.first_seen_ts,
             )
+            _prof_render_ms.append((time.perf_counter() - _t2) * 1000)
+            _t3 = time.perf_counter()
             publisher.write(rendered)
+            _prof_publish_ms.append((time.perf_counter() - _t3) * 1000)
+
+            # Spike alert — log immediately if any stage is unusually slow
+            _last_read = _prof_read_ms[-1] if _prof_read_ms else 0
+            _last_track = _prof_track_ms[-1] if _prof_track_ms else 0
+            _last_render = _prof_render_ms[-1] if _prof_render_ms else 0
+            _last_pub = _prof_publish_ms[-1] if _prof_publish_ms else 0
+            if max(_last_read, _last_track, _last_render, _last_pub) > _PROF_SPIKE_MS:
+                logger.warning(
+                    "SPIKE frame=%s: read=%.1fms track=%.1fms render=%.1fms publish=%.1fms",
+                    frame_index, _last_read, _last_track, _last_render, _last_pub,
+                )
 
             if heartbeat_sec > 0 and (ts - last_heartbeat_ts) >= heartbeat_sec:
                 elapsed = ts - last_heartbeat_ts
                 eff_fps = frames_in_heartbeat / elapsed if elapsed > 0 else 0.0
+                def _pstat(lst):
+                    if not lst: return "n/a"
+                    avg = sum(lst)/len(lst)
+                    mx = max(lst)
+                    p95 = sorted(lst)[int(len(lst)*0.95)] if len(lst) >= 20 else mx
+                    lst.clear()
+                    return f"avg={avg:.1f} p95={p95:.1f} max={mx:.1f}ms"
+                logger.info(
+                    "PROFILER read=%s | track+ptz=%s | render=%s | publish=%s",
+                    _pstat(_prof_read_ms), _pstat(_prof_track_ms),
+                    _pstat(_prof_render_ms), _pstat(_prof_publish_ms),
+                )
                 det_stats = detector.stats_snapshot()
                 evt_stats = event_client.stats_snapshot() if event_client is not None else None
                 logger.info(
