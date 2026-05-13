@@ -72,7 +72,7 @@ stream:
   output_rtsp: "rtsp://mediamtx:8554/tracking"
   mediamtx_push_path: "tracking"
   ffmpeg_bin: "ffmpeg"
-  publisher_queue_size: 1
+  publisher_queue_size: 2
   # Таймаут открытия входного RTSP потока (сек)
   open_timeout_sec: 8.0
   # Порог переподключения: сколько подряд пустых кадров допускается перед переподключением.
