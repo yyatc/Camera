@@ -16,30 +16,12 @@ logger = logging.getLogger(__name__)
 
 def _detect_encoder(ffmpeg_bin: str) -> list:
     """
-    Auto-detects the best available H.264 encoder.
-    Priority: h264_nvenc (NVIDIA GPU) > libx264 (CPU fallback).
-    NVENC encodes on a dedicated GPU block, freeing CUDA cores for inference.
+    Returns libx264 encoder args.
+    NVENC disabled: libnvidia-encode.so.1 is not available in the container.
+    To re-enable NVENC add 'video' to capabilities in docker-compose.yml
+    and change this function to probe h264_nvenc first.
     """
-    try:
-        result = subprocess.run(
-            [ffmpeg_bin, "-encoders"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if "h264_nvenc" in result.stdout:
-            logger.info("Encoder: h264_nvenc (NVIDIA NVENC)")
-            return [
-                "-c:v", "h264_nvenc",
-                "-preset", "p1",   # p1=lowest latency
-                "-tune", "ll",     # low-latency mode
-                "-zerolatency", "1",
-                "-rc", "cbr",
-                "-b:v", "4M",
-                "-maxrate", "4M",
-                "-bufsize", "500k",
-            ]
-    except Exception as exc:
-        logger.debug("Encoder probe failed: %s", exc)
-    logger.info("Encoder: libx264 (CPU fallback)")
+    logger.info("Encoder: libx264 (CPU)")
     return [
         "-c:v", "libx264",
         "-preset", "ultrafast",
