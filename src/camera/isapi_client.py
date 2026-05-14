@@ -313,9 +313,16 @@ class IsapiPtzClient:
                     return None
         return None
 
-    def _probe(self, path: str) -> bool:
-        text = self._request("GET", path, allow_fail=True)
-        return text is not None
+    def _probe(self, path: str, retries: int = 2) -> bool:
+        """Probe endpoint availability with retries to avoid transient failures."""
+        import time as _time
+        for attempt in range(retries):
+            result = self._request("GET", path, allow_fail=True)
+            if result is not None:
+                return True
+            if attempt < retries - 1:
+                _time.sleep(0.3)
+        return False
 
     def _request(
         self,
@@ -338,7 +345,7 @@ class IsapiPtzClient:
             if 200 <= resp.status_code < 300:
                 return resp.text
             if allow_fail:
-                logger.debug("ISAPI %s %s returned %s", method, path, resp.status_code)
+                logger.warning("ISAPI %s %s returned HTTP %s", method, path, resp.status_code)
                 return None
             raise RuntimeError(f"ISAPI {method} {path} failed: HTTP {resp.status_code}")
         except Exception as exc:
