@@ -37,8 +37,8 @@ tracking:
   camera_events_debug_samples_enabled: true
   camera_events_debug_samples_limit: 12
   camera_events_capability_probe_enabled: true
-  camera_events_auto_configure_enabled: true
-  camera_events_auto_configure_dry_run: false
+  camera_events_auto_configure_enabled: false  # do not modify camera settings, read-only
+  camera_events_auto_configure_dry_run: false  # ignored when auto_configure_enabled=false
   camera_presence_signal_enabled: true
   camera_presence_signal_window_sec: 2.5
   detect_every_n_frames_searching_boost: 1
