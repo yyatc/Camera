@@ -3,9 +3,14 @@ name: Build and Push to Docker Hub
 on:
   push:
     branches: [ "master" ]
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: false
+        default: "patch"
+        type: choice
+        options: [patch, minor, major]
 
 env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/camera-tracker
@@ -13,10 +18,27 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to push git tags
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history required for tag detection
+
+      - name: Auto-bump version tag
+        id: tag
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: ${{ github.event.inputs.bump || 'patch' }}
+          tag_prefix: v
+          # Commit message keywords to override default bump:
+          #   feat: / feature:  -> minor bump
+          #   BREAKING CHANGE   -> major bump
+          #   fix: / patch:     -> patch bump (default)
+          release_branches: master
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -33,20 +55,19 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            # git tag v1.2.3  ->  :1.2.3  +  :1.2  +  :1
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            # master push     ->  :latest
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
-            # any push        ->  :sha-a1b2c3d
+            # new semver tag from auto-bump  ->  :1.2.3  +  :1.2  +  :1
+            type=semver,pattern={{version}},value=${{ steps.tag.outputs.new_tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.tag.outputs.new_tag }}
+            type=semver,pattern={{major}},value=${{ steps.tag.outputs.new_tag }}
+            # always tag :latest on master
+            type=raw,value=latest
+            # short SHA for traceability
             type=sha,prefix=sha-,format=short
-            # master push     ->  :edge
-            type=edge,branch=master
           labels: |
             org.opencontainers.image.title=camera-tracker
             org.opencontainers.image.description=PTZ person tracking with YOLO + CUDA
             org.opencontainers.image.vendor=yyatc
+            org.opencontainers.image.version=${{ steps.tag.outputs.new_version }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -58,3 +79,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Docker image published :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.tag.outputs.new_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous:** ${{ steps.tag.outputs.previous_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags pushed:**" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
