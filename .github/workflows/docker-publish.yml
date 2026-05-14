@@ -3,6 +3,8 @@ name: Build and Push to Docker Hub
 on:
   push:
     branches: [ "master" ]
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
 
 env:
@@ -25,14 +27,34 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Extract metadata (tags and labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            # git tag v1.2.3  ->  :1.2.3  +  :1.2  +  :1
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # master push     ->  :latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            # any push        ->  :sha-a1b2c3d
+            type=sha,prefix=sha-,format=short
+            # master push     ->  :edge
+            type=edge,branch=master
+          labels: |
+            org.opencontainers.image.title=camera-tracker
+            org.opencontainers.image.description=PTZ person tracking with YOLO + CUDA
+            org.opencontainers.image.vendor=yyatc
+
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
