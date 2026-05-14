@@ -46,8 +46,9 @@ def resolve_inference_device(spec: Optional[str]) -> str:
         if not _cuda_available():
             logger.warning("ML device GPU %s запрошен, но CUDA недоступна — используется CPU", raw)
             return "cpu"
-        logger.info("ML inference device: CUDA GPU index %s", raw)
-        return raw
+        out = f"cuda:{raw}"
+        logger.info("ML inference device: CUDA GPU index %s -> %s", raw, out)
+        return out
 
     logger.warning("Неизвестное ML device=%r — используется CPU", raw)
     return "cpu"
