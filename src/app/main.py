@@ -71,6 +71,14 @@ class AsyncDetector:
         with self._lock:
             return list(self._latest)
 
+    def stats_snapshot(self):
+        """Delegate to wrapped detector — preserves compatibility with heartbeat logging."""
+        return self._detector.stats_snapshot()
+
+    def __getattr__(self, name):
+        """Fallback delegation: any unknown attribute is forwarded to the wrapped detector."""
+        return getattr(self._detector, name)
+
     def stop(self) -> None:
         self._input.put(None)
         self._thread.join(timeout=5.0)
