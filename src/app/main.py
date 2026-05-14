@@ -373,6 +373,8 @@ def run() -> None:
                 current_target_id = None
                 if prev_mode != TrackingMode.SEARCHING:
                     _on_enter_search_mode(ptz, ptz_cfg)
+                    if ptz is None:
+                        logger.warning("SEARCHING: PTZ is None — patrol disabled, camera will not move")
                 if ptz is not None and (ts - last_monitor_ptz_ts) >= monitor_ptz_interval:
                     _search_cmd = policy.monitoring_command(ts)
                     logger.info(
@@ -591,7 +593,7 @@ def _init_ptz_client(
                 )
                 return isapi
             except Exception as exc:
-                logger.debug("ISAPI channel=%s недоступен: %s", channel_id, exc)
+                logger.warning("ISAPI channel=%s недоступен: %s", channel_id, exc)
 
     # 2) Fallback to ONVIF
     ports = []
@@ -631,7 +633,7 @@ def _init_ptz_client(
                 raise result["error"]  # type: ignore[misc]
         except Exception as exc:
             last_error = exc
-            logger.debug("ONVIF порт %s: %s", port, exc)
+            logger.warning("ONVIF порт %s: %s", port, exc)
 
     logger.warning("ONVIF недоступен, работа без PTZ: %s", last_error)
     return None
