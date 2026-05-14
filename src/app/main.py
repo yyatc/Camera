@@ -374,8 +374,13 @@ def run() -> None:
                 if prev_mode != TrackingMode.SEARCHING:
                     _on_enter_search_mode(ptz, ptz_cfg)
                 if ptz is not None and (ts - last_monitor_ptz_ts) >= monitor_ptz_interval:
+                    _search_cmd = policy.monitoring_command(ts)
+                    logger.debug(
+                        "PTZ SEARCH cmd: pan=%.3f tilt=%.3f zoom=%.3f",
+                        _search_cmd.pan_speed, _search_cmd.tilt_speed, _search_cmd.zoom_speed,
+                    )
                     last_ptz_error_log_ts = _safe_ptz_move(
-                        ptz, policy.monitoring_command(ts), ts, last_ptz_error_log_ts
+                        ptz, _search_cmd, ts, last_ptz_error_log_ts
                     )
                     last_monitor_ptz_ts = ts
 
