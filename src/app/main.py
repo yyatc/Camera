@@ -375,7 +375,7 @@ def run() -> None:
                     _on_enter_search_mode(ptz, ptz_cfg)
                 if ptz is not None and (ts - last_monitor_ptz_ts) >= monitor_ptz_interval:
                     _search_cmd = policy.monitoring_command(ts)
-                    logger.debug(
+                    logger.info(
                         "PTZ SEARCH cmd: pan=%.3f tilt=%.3f zoom=%.3f",
                         _search_cmd.pan_speed, _search_cmd.tilt_speed, _search_cmd.zoom_speed,
                     )
@@ -523,6 +523,10 @@ def _on_enter_search_mode(ptz: Optional[PtzClient], ptz_cfg: dict) -> None:
             logger.info("PTZ: переход в home preset id=%s", preset_id)
         except Exception as exc:
             logger.debug("PTZ: home preset недоступен: %s", exc)
+
+    # Пауза после перехода в home preset — некоторые камеры игнорируют
+    # continuous команды пока выполняется goto_preset.
+    time.sleep(1.5)
 
     # 2) Дополнительно сбрасываем zoom (для камер с absolute control).
     if bool(ptz_cfg.get("search_reset_zoom", True)) and hasattr(ptz, "move_absolute"):
