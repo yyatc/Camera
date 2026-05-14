@@ -36,6 +36,9 @@ class RtspReader:
         self._lock = threading.Lock()
         self._latest_frame: Optional[np.ndarray] = None
         self._last_frame_ts: float = 0.0
+        self._frame_seq: int = 0          # incremented on every new frame from camera
+        self._last_read_seq: int = -1     # seq of last frame returned by read()
+        self._new_frame_event = threading.Event()  # signaled when new frame arrives
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -76,6 +79,9 @@ class RtspReader:
             logger.error("Не удалось открыть входной поток: %s", safe)
             raise RuntimeError(f"Unable to open RTSP stream: {self._url}")
         self._reset_frame_state()
+        self._last_read_seq = -1
+        self._frame_seq = 0
+        self._new_frame_event.clear()
         self._running = True
         self._thread = threading.Thread(target=self._grab_loop, daemon=True, name="rtsp-grabber")
         self._thread.start()
@@ -100,18 +106,41 @@ class RtspReader:
                 with self._lock:
                     self._latest_frame = frame
                     self._last_frame_ts = time.monotonic()
+                    self._frame_seq += 1
+                self._new_frame_event.set()
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
-        with self._lock:
-            frame = self._latest_frame
-            ts = self._last_frame_ts
-        if frame is None or (time.monotonic() - ts) > _FRAME_STALE_SEC:
-            # Небольшой sleep предотвращает spin-loop в основном цикле пока камера
-            # ещё подключается или временно недоступна. Без него главный цикл
-            # набирает 30 «ошибок» за микросекунды и немедленно переподключается.
-            time.sleep(0.05)
-            return False, None
-        return True, frame
+        """
+        Returns the next NEW frame from the camera.
+        Blocks until a frame arrives that hasn't been returned yet,
+        or until _FRAME_STALE_SEC timeout.
+        This prevents the main loop from spinning at thousands of FPS
+        on cached frames and flooding ffmpeg with duplicate data.
+        """
+        # Wait for a new frame (one not yet returned to the caller)
+        deadline = time.monotonic() + _FRAME_STALE_SEC
+        while True:
+            self._new_frame_event.wait(timeout=0.1)
+            self._new_frame_event.clear()
+            with self._lock:
+                seq = self._frame_seq
+                frame = self._latest_frame
+                ts = self._last_frame_ts
+            if frame is None:
+                if time.monotonic() >= deadline:
+                    time.sleep(0.05)
+                    return False, None
+                continue
+            if (time.monotonic() - ts) > _FRAME_STALE_SEC:
+                time.sleep(0.05)
+                return False, None
+            if seq == self._last_read_seq:
+                # Same frame as before — wait for next one
+                if time.monotonic() >= deadline:
+                    return False, None
+                continue
+            self._last_read_seq = seq
+            return True, frame
 
     def close(self) -> None:
         self._running = False
