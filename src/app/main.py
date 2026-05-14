@@ -44,6 +44,7 @@ class AsyncDetector:
         self._detector = detector
         self._input: queue.Queue = queue.Queue(maxsize=1)
         self._latest = []
+        self._has_result = False  # True after first inference completes
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="detector")
         self._thread.start()
@@ -57,6 +58,7 @@ class AsyncDetector:
                 result = self._detector.detect(frame)
                 with self._lock:
                     self._latest = result
+                    self._has_result = True
             except Exception as exc:
                 logger.error("Detector error: %s", exc)
 
@@ -69,7 +71,7 @@ class AsyncDetector:
     @property
     def latest(self):
         with self._lock:
-            return list(self._latest)
+            return list(self._latest) if self._has_result else None
 
     def stats_snapshot(self):
         """Delegate to wrapped detector — preserves compatibility with heartbeat logging."""
@@ -287,7 +289,7 @@ def run() -> None:
     _prof_track_ms: list = []
     _prof_render_ms: list = []
     _prof_publish_ms: list = []
-    _PROF_SPIKE_MS = 50.0   # warn if any stage exceeds this threshold
+    _PROF_SPIKE_MS = 150.0  # warn threshold: 150ms (~4x frame at 25fps)
 
     reader.open()
     publisher.open()
@@ -350,8 +352,14 @@ def run() -> None:
                 detect_stride = detect_every_searching_boost
             if frame_index % detect_stride == 0:
                 detector.submit(frame)
-            detections = detector.latest or cached_detections
-            cached_detections = detections
+            _det = detector.latest
+            if _det is None:
+                # Detector hasn't produced a result yet — use cache
+                detections = cached_detections
+            else:
+                # Detector returned a result (may be empty list = no people)
+                detections = _det
+                cached_detections = _det
             tracks = tracker.update(detections, ts=ts)
             target = selector.choose_target(tracks, preferred_id=current_target_id)
             if target is not None:
